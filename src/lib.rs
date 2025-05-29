@@ -752,7 +752,7 @@ mod tests {
     use fitsrs::fits::Fits;
     use fitsrs::card::CardValue;
     use fitsrs::hdu::header::{extension::image::Image, Header};
-    use fitsrs::ImageData;
+    use fitsrs::Pixels;
     use fitsrs::card::Value;
 
     use glob::glob;
@@ -1001,7 +1001,23 @@ mod tests {
 
     #[test]
     fn test_visualize() {
-        let f = File::open("examples/panstarrs-rotated-around-orion.fits").unwrap();
+        // Print current working directory
+        println!("Current working directory: {:?}", std::env::current_dir().unwrap());
+        
+        // List contents of examples directory
+        println!("Contents of examples directory:");
+        if let Ok(entries) = std::fs::read_dir("examples") {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    println!("- {:?}", entry.path());
+                }
+            }
+        } else {
+            println!("Could not read examples directory");
+        }
+        
+        let f = File::open("examples/panstarrs-rotated-around-orion.fits")
+            .expect("Failed to open FITS file");
 
         let reader = BufReader::new(f);
         let mut fits = Fits::from_reader(reader);
@@ -1012,9 +1028,9 @@ mod tests {
                 let header = hdu.get_header();
 
                 // Parse data
-                let data = match fits.get_data(&hdu) {
-                    ImageData::F32(it) => it.collect::<Vec<_>>(),
-                    _ => unreachable!(),
+                let data = match fits.get_data(&hdu).pixels() {
+                    Pixels::F32(it) => it.collect::<Vec<_>>(),
+                    _ => unreachable!("Expected F32 pixel data"),
                 };
 
                 let wcs = wcs_from_fits_header(&header).unwrap();
@@ -1107,11 +1123,20 @@ mod tests {
             }
         }
 
+        // Create the output directory if it doesn't exist
+        let dir = "tests/reproj";
+        if !std::path::Path::new(dir).exists() {
+            std::fs::create_dir_all(dir).expect("Failed to create output directory");
+        }
+        
         let filename = &format!(
-            "tests/reproj/pans-{}.jpeg",
+            "{}/pans-{}.jpeg",
+            dir,
             <T as CanonicalProjection>::WCS_NAME
         );
-        imgbuf.save(filename).unwrap();
+        imgbuf.save(filename).unwrap_or_else(|e| {
+            eprintln!("Failed to save {}: {}", filename, e);
+        });
     }
 
     macro_rules! assert_delta {
