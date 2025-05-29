@@ -2,8 +2,23 @@ extern crate mapproj;
 #[macro_use]
 extern crate quick_error;
 
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use pyo3::exceptions::PyValueError;
+use serde_json;
+use crate::params::WCSParams as RustWCSParams;
+use crate::WCS as RustWCS;
+use crate::LonLat as RustLonLat;
+use crate::ImgXY as RustImgXY;
 
 #[doc = include_str!("../readme.md")]
+
+// PyO3 Error conversion
+impl From<crate::error::Error> for PyErr {
+    fn from(err: crate::error::Error) -> PyErr {
+        PyValueError::new_err(err.to_string())
+    }
+}
 
 pub mod error;
 
@@ -157,6 +172,91 @@ impl WCS {
     /// Get the coordinate system frame
     pub fn coo_system(&self) -> &CooSystem {
         self.proj.coo_system()
+    }
+}
+
+#[pymodule]
+fn wcs_rs(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<PyWCSParams>()?;
+    m.add_class::<PyWCS>()?;
+    // Other classes will be added here later
+    Ok(())
+}
+
+#[pyclass(name = "WCSParams")]
+pub struct PyWCSParams {
+    pub params: RustWCSParams,
+}
+
+#[pyclass(name = "WCS")]
+pub struct PyWCS {
+    pub wcs: RustWCS,
+}
+
+#[pymethods]
+impl PyWCSParams {
+    #[new]
+    fn new(data: &PyDict) -> PyResult<Self> {
+        // Convert PyDict to HashMap<String, serde_json::Value>
+        let mut params_map = serde_json::Map::new();
+        for (key, value) in data.iter() {
+            let key_str: String = key.extract()?;
+            // Attempt to convert various Python types to serde_json::Value
+            // This part might need careful handling of types (str, float, int, bool)
+            let json_value = if let Ok(s) = value.extract::<String>() {
+                serde_json::Value::String(s)
+            } else if let Ok(f) = value.extract::<f64>() {
+                serde_json::Value::Number(serde_json::Number::from_f64(f).ok_or_else(|| PyValueError::new_err(format!("Invalid float value for key {}", key_str)))?)
+            } else if let Ok(i) = value.extract::<i64>() {
+                serde_json::Value::Number(serde_json::Number::from(i))
+            } else if let Ok(b) = value.extract::<bool>() {
+                serde_json::Value::Bool(b)
+            } else if value.is_none() {
+                serde_json::Value::Null
+            }
+            else {
+                return Err(PyValueError::new_err(format!("Unsupported value type for key {} in WCSParams dictionary", key_str)));
+            };
+            params_map.insert(key_str, json_value);
+        }
+
+        let params_json_obj = serde_json::Value::Object(params_map);
+        let params_str = serde_json::to_string(&params_json_obj)
+            .map_err(|e| PyValueError::new_err(format!("Failed to serialize WCSParams to JSON: {}", e)))?;
+
+        let rust_params: RustWCSParams = serde_json::from_str(&params_str)
+            .map_err(|e| PyValueError::new_err(format!("Failed to deserialize WCSParams from JSON: {}", e)))?;
+
+        Ok(PyWCSParams { params: rust_params })
+    }
+}
+
+#[pymethods]
+impl PyWCS {
+    #[new]
+    fn new(params: &PyWCSParams) -> PyResult<Self> {
+        let rust_wcs = RustWCS::new(&params.params)?;
+        Ok(PyWCS { wcs: rust_wcs })
+    }
+
+    #[pyo3(text_signature = "($self, lon, lat)")]
+    fn proj(&self, lon: f64, lat: f64) -> PyResult<Option<(f64, f64)>> {
+        let rust_lonlat = RustLonLat::new(lon.to_radians(), lat.to_radians());
+        if let Some(img_xy) = self.wcs.proj(&rust_lonlat) {
+            Ok(Some((img_xy.x(), img_xy.y())))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[pyo3(text_signature = "($self, x, y)")]
+    fn unproj(&self, x: f64, y: f64) -> PyResult<Option<(f64, f64)>> {
+        let rust_img_xy = RustImgXY::new(x, y);
+        if let Some(lon_lat) = self.wcs.unproj(&rust_img_xy) {
+            Ok(Some((lon_lat.lon().to_degrees(), lon_lat.lat().to_degrees())))
+        } else {
+            Ok(None)
+        }
     }
 }
 
