@@ -205,14 +205,14 @@ impl PyWCSParams {
             // This part might need careful handling of types (str, float, int, bool)
             let json_value = if let Ok(s) = value.extract::<String>() {
                 serde_json::Value::String(s)
-            } else if let Ok(f) = value.extract::<f64>() {
-                serde_json::Value::Number(serde_json::Number::from_f64(f).ok_or_else(|| PyValueError::new_err(format!("Invalid float value for key {}", key_str)))?)
-            } else if let Ok(i) = value.extract::<i64>() {
-                serde_json::Value::Number(serde_json::Number::from(i))
-            } else if let Ok(b) = value.extract::<bool>() {
-                serde_json::Value::Bool(b)
             } else if value.is_none() {
                 serde_json::Value::Null
+            } else if let Ok(b) = value.extract::<bool>() {
+                serde_json::Value::Bool(b)
+            } else if let Ok(i) = value.extract::<i64>() {
+                serde_json::Value::Number(serde_json::Number::from(i))
+            } else if let Ok(f) = value.extract::<f64>() {
+                serde_json::Value::Number(serde_json::Number::from_f64(f).ok_or_else(|| PyValueError::new_err(format!("Invalid float value for key {}", key_str)))?)
             }
             else {
                 return Err(PyValueError::new_err(format!("Unsupported value type for key {} in WCSParams dictionary", key_str)));
@@ -228,6 +228,46 @@ impl PyWCSParams {
             .map_err(|e| PyValueError::new_err(format!("Failed to deserialize WCSParams from JSON: {}", e)))?;
 
         Ok(PyWCSParams { params: rust_params })
+    }
+    
+    /// Convert the WCSParams back to a Python dictionary
+    fn to_dict(&self, py: Python) -> PyResult<PyObject> {
+        // Serialize the Rust WCSParams to a JSON string
+        let json_str = serde_json::to_string(&self.params)
+            .map_err(|e| PyValueError::new_err(format!("Failed to serialize WCSParams: {}", e)))?;
+            
+        // Parse the JSON string back to a serde_json::Value
+        let json_value: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| PyValueError::new_err(format!("Failed to parse WCSParams JSON: {}", e)))?;
+            
+        // Convert the serde_json::Value to a Python dictionary
+        match json_value {
+            serde_json::Value::Object(map) => {
+                let dict = PyDict::new(py);
+                for (k, v) in map {
+                    let py_val = match v {
+                        serde_json::Value::Null => py.None(),
+                        serde_json::Value::Bool(b) => b.into_py(py),
+                        serde_json::Value::Number(n) => {
+                            if let Some(i) = n.as_i64() {
+                                i.into_py(py)
+                            } else if let Some(f) = n.as_f64() {
+                                f.into_py(py)
+                            } else {
+                                n.to_string().into_py(py)
+                            }
+                        },
+                        serde_json::Value::String(s) => s.into_py(py),
+                        // For simplicity, we'll convert arrays and objects to strings
+                        // For a more complete implementation, you might want to handle these cases
+                        _ => v.to_string().into_py(py),
+                    };
+                    dict.set_item(k, py_val)?;
+                }
+                Ok(dict.into())
+            },
+            _ => Err(PyValueError::new_err("Expected a JSON object"))?,
+        }
     }
 }
 
