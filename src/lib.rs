@@ -176,7 +176,7 @@ impl WCS {
 }
 
 #[pymodule]
-fn wcs_rs(_py: Python, m: &PyModule) -> PyResult<()> {
+fn wcs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyWCSParams>()?;
     m.add_class::<PyWCS>()?;
     // Other classes will be added here later
