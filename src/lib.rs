@@ -3,7 +3,7 @@ extern crate mapproj;
 extern crate quick_error;
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyBytes};
 use pyo3::exceptions::PyValueError;
 use serde_json;
 use crate::params::WCSParams as RustWCSParams;
@@ -176,7 +176,7 @@ impl WCS {
 }
 
 #[pymodule]
-fn wcs(_py: Python, m: &PyModule) -> PyResult<()> {
+fn wcs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWCSParams>()?;
     m.add_class::<PyWCS>()?;
     // Other classes will be added here later
@@ -196,7 +196,7 @@ pub struct PyWCS {
 #[pymethods]
 impl PyWCSParams {
     #[new]
-    fn new(data: &PyDict) -> PyResult<Self> {
+    fn new(data: &Bound<'_, PyDict>) -> PyResult<Self> {
         // Convert PyDict to HashMap<String, serde_json::Value>
         let mut params_map = serde_json::Map::new();
         for (key, value) in data.iter() {
@@ -231,7 +231,7 @@ impl PyWCSParams {
     }
     
     /// Convert the WCSParams back to a Python dictionary
-    fn to_dict(&self, py: Python) -> PyResult<PyObject> {
+    fn to_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Serialize the Rust WCSParams to a JSON string
         let json_str = serde_json::to_string(&self.params)
             .map_err(|e| PyValueError::new_err(format!("Failed to serialize WCSParams: {}", e)))?;
@@ -243,7 +243,7 @@ impl PyWCSParams {
         // Convert the serde_json::Value to a Python dictionary
         match json_value {
             serde_json::Value::Object(map) => {
-                let dict = PyDict::new(py);
+                let dict = PyDict::new_bound(py);
                 for (k, v) in map {
                     let py_val = match v {
                         serde_json::Value::Null => py.None(),
@@ -268,6 +268,21 @@ impl PyWCSParams {
             },
             _ => Err(PyValueError::new_err("Expected a JSON object"))?,
         }
+    }
+
+    /// Serialize WCSParams to Python bytes using bincode.
+    fn to_bytes<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyBytes>> {
+        let encoded: Vec<u8> = bincode::serialize(&self.params)
+            .map_err(|e| PyValueError::new_err(format!("Failed to serialize WCSParams: {}", e)))?;
+        Ok(PyBytes::new_bound(py, &encoded))
+    }
+
+    /// Deserialize WCSParams from Python bytes using bincode.
+    #[staticmethod]
+    fn from_bytes(bytes: &Bound<'_, PyBytes>) -> PyResult<Self> {
+        let params: RustWCSParams = bincode::deserialize(bytes.as_bytes())
+            .map_err(|e| PyValueError::new_err(format!("Failed to deserialize WCSParams: {}", e)))?;
+        Ok(PyWCSParams { params })
     }
 }
 
